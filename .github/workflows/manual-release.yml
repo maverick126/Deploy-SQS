@@ -1,5 +1,5 @@
 # This is a basic workflow to help you get started with Actions
-name: CI
+name: SQS Manual Trigger Deploy 
 
 env:  
   deployscript: "DeployCustomScripts.ps1"
@@ -40,7 +40,7 @@ jobs:
         echo "::set-env name=az_storage::$az_storage"
         echo "::set-env name=az_container::$az_container"
 
-    - name: create the CustomExtention script
+    - name: create the CustomExtension script
       run:  |
         cat <<EOF > ${{ env.deployscript }}
         \$headers=@{'Authorization'='Bearer ${{ secrets.ARTIFACTS_TOKEN }}'}
@@ -70,12 +70,12 @@ jobs:
         creds: ${{ secrets.AZ_CREDS }}
         enable-AzPSSession: true 
 
-    - name: upload CustomExtention trigger script to container
+    - name: upload CustomExtension trigger script to container
       run: |
         az storage copy --source-local-path ${{ env.deployscript }} --destination-account-name ${{ env.az_storage }} --destination-container ${{ env.az_container }}  
         az storage copy --source-local-path customscript.ps1 --destination-account-name ${{ env.az_storage }} --destination-container ${{ env.az_container }}  
 
-    - name: run the Azure CustomExtention script 
+    - name: run the Azure CustomExtension script 
       uses: azure/powershell@v1
       with:
         azPSVersion: '3.1.0'
