@@ -13,6 +13,8 @@ of the application build.  Edit the **runinfo.json** json file with the appropri
 }
 ```
  
+ Commit and push the change to *master* branch to trigger the action 
+
 - **runid** - SQS app build Github runid.  You can get this in the Github Actions of the SQS build workflow
 - **vmhost** - Azure VM host target to deploy the binaries
 - **az_storage** - Azure storage account to hold the custom script
