@@ -1,0 +1,82 @@
+# This is a basic workflow to help you get started with Actions
+name: CI
+
+env:  
+  deployscript: "DeployCustomScripts.ps1"
+  api_repo: "https://api.github.com/repos/Metricon/SQS/actions/runs"
+  
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  build:
+    # The type of runner that the job will run on
+    runs-on: ubuntu-latest
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+    - uses: actions/checkout@v2
+
+    #- name: Setup MSBuild.exe
+    #  uses: microsoft/setup-msbuild@v1        
+
+    #- name: check msdeploy
+    #  run: dir "C:\Program Files (x86)\IIS\Microsoft Web Deploy V3\"
+    - name: get runid
+      run: |
+        runid=$(cat runinfo.json|jq '.runid')
+        sqshost=$(cat runinfo.json|jq '.vmhost'|tr -d '"')
+        resource_group=$(cat runinfo.json|jq '.resource_group'|tr -d '"')
+        az_storage=$(cat runinfo.json|jq '.az_storage'|tr -d '"')
+        az_container=$(cat runinfo.json|jq '.az_container'|tr -d '"')
+        echo "::set-env name=runid::$runid"
+        echo "::set-env name=sqshost::$sqshost"
+        echo "::set-env name=resource_group::$resource_group"
+        echo "::set-env name=az_storage::$az_storage"
+        echo "::set-env name=az_container::$az_container"
+
+    - name: create the CustomExtention script
+      run:  |
+        cat <<EOF > ${{ env.deployscript }}
+        \$headers=@{'Authorization'='Bearer ${{ secrets.ARTIFACTS_TOKEN }}'}
+        \$r=Invoke-WebRequest -H \$headers -UseBasicParsing ${{ env.api_repo }}/${{ env.runid }}/artifacts        
+        \$json = \$r.Content|ConvertFrom-Json
+        \$downloadUrl = \$json.artifacts.archive_download_url 
+        Invoke-WebRequest -H \$headers \$downloadUrl -UseBasicParsing -OutFile SQSPackage.zip
+        Write-Host 'SQS Deployment'
+        Expand-Archive -LiteralPath SQSPackage.zip -force
+        exit 0
+        EOF
+
+    - name: create customscript config
+      run: |
+        cat <<EOF > customscript.ps1
+        \$fileUri = @("${{ env.customscript }}")
+        \$settings = @{"fileUris" = \$fileUri}
+        \$protectedSettings = @{"commandToExecute" = "powershell -ExecutionPolicy Unrestricted -File ${{ env.deployscript }}"}
+        Set-AzVMExtension -ResourceGroupName ${{ env.resource_group }} -Location australiasoutheast -VMName ${{ env.sqshost }} -Name sqs.script -Publisher "Microsoft.Compute" -ExtensionType "CustomScriptExtension" -TypeHandlerVersion "1.10" -Settings \$settings -ProtectedSettings \$protectedSettings
+        EOF
+      env: 
+        customscript: "https://${{ env.az_storage }}.blob.core.windows.net/${{ env.az_container }}/${{ env.deployscript }}"
+      
+    - name: Login via Az module
+      uses: azure/login@v1.1
+      with:
+        creds: ${{ secrets.AZ_CREDS }}
+        enable-AzPSSession: true 
+
+    - name: upload CustomExtention trigger script to container
+      run: |
+        az storage copy --source-local-path ${{ env.deployscript }} --destination-account-name ${{ env.az_storage }} --destination-container ${{ env.az_container }}  
+        az storage copy --source-local-path customscript.ps1 --destination-account-name ${{ env.az_storage }} --destination-container ${{ env.az_container }}  
+
+    - name: run the Azure CustomExtention script 
+      uses: azure/powershell@v1
+      with:
+        azPSVersion: '3.1.0'
+        inlineScript: ./customscript.ps1

@@ -1,0 +1,7 @@
+{
+    "runid": 123599725,
+    "vmhost": "sqsvmdev",
+    "resource_group": "rg-sqs-rsm-mrs-nonprod",
+    "az_storage": "sqsstononprod",
+    "az_container": "deploy"
+}
