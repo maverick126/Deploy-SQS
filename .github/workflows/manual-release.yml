@@ -81,12 +81,16 @@ jobs:
         \$sqselement.Value="Default Web Site/SQS"
         \$sqsxml.Save(\$sqsPath)  
 
+        Stop-WebSite -Name "Default Web Site"
+
         Write-Host "Applying the deploy"
         \$es = Get-ChildItem "*.cmd" | Select-Object -Property Name
         foreach (\$e in \$es ) {
           \$f = "./" + \$e.Name + " /Y"
           iex \$f | Out-File -FilePath .\Deploylog.txt -Append
         }              
+        
+        Start-WebSite -Name "Default Web Site"
         
         exit 0
         EOF
