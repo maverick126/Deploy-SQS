@@ -40,16 +40,54 @@ jobs:
         echo "::set-env name=az_storage::$az_storage"
         echo "::set-env name=az_container::$az_container"
 
-    - name: create the CustomExtension script
+    - name: create the CustomExtentsion script
       run:  |
         cat <<EOF > ${{ env.deployscript }}
+        Write-Host 'Run Test SQS Deployment v3'
+        New-Item -ItemType Directory -Force -Path D:\deploy\${{ env.runid }}
         \$headers=@{'Authorization'='Bearer ${{ secrets.ARTIFACTS_TOKEN }}'}
         \$r=Invoke-WebRequest -H \$headers -UseBasicParsing ${{ env.api_repo }}/${{ env.runid }}/artifacts        
         \$json = \$r.Content|ConvertFrom-Json
         \$downloadUrl = \$json.artifacts.archive_download_url 
-        Invoke-WebRequest -H \$headers \$downloadUrl -UseBasicParsing -OutFile SQSPackage.zip
-        Write-Host 'SQS Deployment'
-        Expand-Archive -LiteralPath SQSPackage.zip -force
+        \$UserAgent = 'Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.2; .NET CLR 1.0.3705;)'
+        \$webClient = New-Object System.Net.WebClient
+        \$headers.GetEnumerator() | ForEach-Object {
+          \$webClient.Headers.Add(\$_.Key, \$_.Value)
+        }
+        \$webClient.Headers.Add([System.Net.HttpRequestHeader]::UserAgent, \$UserAgent);
+        \$webClient.DownloadFile(\$downloadUrl, 'SQSPackage.zip')
+        
+        Copy-Item -Path "*.zip" -Destination D:\deploy\${{ env.runid }}
+        Set-Location -Path D:\deploy\${{ env.runid }}
+        Expand-Archive -LiteralPath SQSPackage.zip 
+        Set-Location -Path D:\deploy\${{ env.runid }}\SQSPackage
+        Expand-Archive -LiteralPath SQSPackage-${{ env.runid }}.zip
+        Set-Location -Path D:\deploy\${{ env.runid }}\SQSPackage\SQSPackage-${{ env.runid }}
+
+        Write-Host "Change the parameter values"
+        \$sqswsxmlf = Get-ChildItem -Path "SQSWS-*.SetParameters.xml"|Select-Object -Property Name
+        \$sqswsPath = "D:\deploy\${{ env.runid }}\SQSPackage\SQSPackage-${{ env.runid }}\"+\$sqswsxmlf.Name
+        \$sqswsxml = New-Object XML
+        \$sqswsxml.Load(\$sqswsPath)
+        \$sqswselement =  \$sqswsxml.SelectSingleNode("//setParameter")
+        \$sqswselement.Value="Default Web Site/SQSWS"
+        \$sqswsxml.Save(\$sqswsPath)
+        
+        \$sqsxmlf = Get-ChildItem -Path "SQS-*.SetParameters.xml"|Select-Object -Property Name
+        \$sqsPath = "D:\deploy\${{ env.runid }}\SQSPackage\SQSPackage-${{ env.runid }}\"+\$sqsxmlf.Name
+        \$sqsxml = New-Object XML
+        \$sqsxml.Load(\$sqsPath)
+        \$sqselement =  \$sqsxml.SelectSingleNode("//setParameter")
+        \$sqselement.Value="Default Web Site/SQS"
+        \$sqsxml.Save(\$sqsPath)  
+
+        Write-Host "Applying the deploy"
+        \$es = Get-ChildItem "*.cmd" | Select-Object -Property Name
+        foreach (\$e in \$es ) {
+          \$f = "./" + \$e.Name + " /Y"
+          iex \$f | Out-File -FilePath .\Deploylog.txt -Append
+        }              
+        
         exit 0
         EOF
 
@@ -70,12 +108,17 @@ jobs:
         creds: ${{ secrets.AZ_CREDS }}
         enable-AzPSSession: true 
 
-    - name: upload CustomExtension trigger script to container
+    - name: delete the Custom script extension
+      run: |
+        az vm extension delete --resource-group ${{ env.resource_group }} --vm-name ${{ env.sqshost }} --name sqs.script 
+        az vm extension wait --deleted --resource-group ${{ env.resource_group }} --vm-name ${{ env.sqshost }} --name sqs.script 
+
+    - name: upload CustomExtention trigger script to container
       run: |
         az storage copy --source-local-path ${{ env.deployscript }} --destination-account-name ${{ env.az_storage }} --destination-container ${{ env.az_container }}  
-        az storage copy --source-local-path customscript.ps1 --destination-account-name ${{ env.az_storage }} --destination-container ${{ env.az_container }}  
+        az storage copy --source-local-path customscript.ps1 --destination-account-name ${{ env.az_storage }} --destination-container ${{ env.az_container }}          
 
-    - name: run the Azure CustomExtension script 
+    - name: run the Azure CustomExtention script 
       uses: azure/powershell@v1
       with:
         azPSVersion: '3.1.0'
