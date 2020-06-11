@@ -40,10 +40,22 @@ jobs:
         echo "::set-env name=az_storage::$az_storage"
         echo "::set-env name=az_container::$az_container"
 
-    - name: create the CustomExtentsion script
+    - name: check if the artifacts are available
+      id: artifacts_check
+      shell: bash
+      run: |
+        curl -H "Authorization: Bearer ${{ secrets.ARTIFACTS_TOKEN }}" ${{ env.api_repo }}/${{ env.runid }}/artifacts --output artifacts.json
+        downloadUrl=$(cat artifacts.json | jq -c '.artifacts[] | .archive_download_url' | tr -d '"')
+        echo "::set-output name=exit_code::$?"         
+
+    - name: create the CustomExtension script
       run:  |
         cat <<EOF > ${{ env.deployscript }}
         Write-Host 'Run Test SQS Deployment v3'
+        New-Item -ItemType Directory -Force -Path D:\deploy\${{ env.runid }}
+        \$PkgName='SQSPackage.zip'
+        \$PkgPath='D:\deploy\${{ env.runid }}'
+
         New-Item -ItemType Directory -Force -Path D:\deploy\${{ env.runid }}
         \$headers=@{'Authorization'='Bearer ${{ secrets.ARTIFACTS_TOKEN }}'}
         \$r=Invoke-WebRequest -H \$headers -UseBasicParsing ${{ env.api_repo }}/${{ env.runid }}/artifacts        
@@ -55,26 +67,26 @@ jobs:
           \$webClient.Headers.Add(\$_.Key, \$_.Value)
         }
         \$webClient.Headers.Add([System.Net.HttpRequestHeader]::UserAgent, \$UserAgent);
-        \$webClient.DownloadFile(\$downloadUrl, 'SQSPackage.zip')
-        
-        Copy-Item -Path "*.zip" -Destination D:\deploy\${{ env.runid }}
-        Set-Location -Path D:\deploy\${{ env.runid }}
-        Expand-Archive -LiteralPath SQSPackage.zip 
-        Set-Location -Path D:\deploy\${{ env.runid }}\SQSPackage
-        Expand-Archive -LiteralPath SQSPackage-${{ env.runid }}.zip
-        Set-Location -Path D:\deploy\${{ env.runid }}\SQSPackage\SQSPackage-${{ env.runid }}
+        \$webClient.DownloadFile(\$downloadUrl, \$PkgPath+'\'+\$PkgName)
 
+        Set-Location -Path \$PkgPath
+        Expand-Archive -LiteralPath \$PkgName 
+
+        Set-Location -Path \$PkgPath\SQSPackage
+        Expand-Archive -LiteralPath SQSPackage-${{ env.runid }}.zip
+        Set-Location -Path \$PkgPath\SQSPackage\SQSPackage-${{ env.runid }}        
+                
         Write-Host "Change the parameter values"
-        \$sqswsxmlf = Get-ChildItem -Path "SQSWS-*.SetParameters.xml"|Select-Object -Property Name
-        \$sqswsPath = "D:\deploy\${{ env.runid }}\SQSPackage\SQSPackage-${{ env.runid }}\"+\$sqswsxmlf.Name
+        \$sqswsxmlf = (Get-ChildItem -Path "SQSWS-*.SetParameters.xml").Name
+        \$sqswsPath = \$PkgPath+"\SQSPackage\SQSPackage-${{ env.runid }}\"+\$sqswsxmlf
         \$sqswsxml = New-Object XML
         \$sqswsxml.Load(\$sqswsPath)
         \$sqswselement =  \$sqswsxml.SelectSingleNode("//setParameter")
         \$sqswselement.Value="Default Web Site/SQSWS"
         \$sqswsxml.Save(\$sqswsPath)
         
-        \$sqsxmlf = Get-ChildItem -Path "SQS-*.SetParameters.xml"|Select-Object -Property Name
-        \$sqsPath = "D:\deploy\${{ env.runid }}\SQSPackage\SQSPackage-${{ env.runid }}\"+\$sqsxmlf.Name
+        \$sqsxmlf = (Get-ChildItem -Path "SQS-*.SetParameters.xml").Name
+        \$sqsPath = \$PkgPath+"\SQSPackage\SQSPackage-${{ env.runid }}\"+\$sqsxmlf
         \$sqsxml = New-Object XML
         \$sqsxml.Load(\$sqsPath)
         \$sqselement =  \$sqsxml.SelectSingleNode("//setParameter")
@@ -83,12 +95,19 @@ jobs:
 
         Stop-WebSite -Name "Default Web Site"
 
-        Write-Host "Applying the deploy"
+        Write-Host "Applying the SQS deploy"
         \$es = Get-ChildItem "*.cmd" | Select-Object -Property Name
         foreach (\$e in \$es ) {
           \$f = "./" + \$e.Name + " /Y"
-          iex \$f | Out-File -FilePath .\Deploylog.txt -Append
+          iex \$f | Out-File -FilePath .\SQSDeploylog.txt -Append
         }              
+
+        \$appPath="Default Web Site/SQS"
+        Set-WebConfigurationProperty -filter /system.webServer/security/authentication/windowsAuthentication -name enabled -value true -PSPath IIS:\ -location \$appPath
+        Set-WebConfigurationProperty -filter /system.webServer/security/authentication/anonymousAuthentication -name enabled -value false -PSPath IIS:\ -location \$appPath
+
+        Set-ItemProperty -path "IIS:\Sites\Default Web Site\SQS" -name applicationPool -value "SQS" -Force
+        Set-ItemProperty -path "IIS:\Sites\Default Web Site\SQSWS" -name applicationPool -value "SQSWS" -Force
         
         Start-WebSite -Name "Default Web Site"
         
